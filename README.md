@@ -4,7 +4,7 @@
 
 ## Version 0.1
 
-React + TypeScript + Vite で作成した試作版です。
+React + TypeScript + Vite の標準構成を土台にした試作版です。GitHub Pages への公開を前提に、Vite の `base` を `/ai-anime-production-dashboard/` に設定しています。
 
 ### 起動方法
 
@@ -14,6 +14,18 @@ npm run dev
 ```
 
 表示されたローカルURLをブラウザで開いてください。
+
+### ビルド
+
+```bash
+npm run build
+```
+
+ビルド成果物は `dist/` に出力されます。
+
+### GitHub Pages
+
+`main` ブランチへの push、または GitHub Actions の手動実行で `.github/workflows/deploy.yml` が起動し、`npm install`、`npm run build`、Pages へのデプロイを実行します。
 
 ### 動作確認方法
 
