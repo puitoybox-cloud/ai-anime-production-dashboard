@@ -8,6 +8,9 @@ type PromptAiType = 'chatgpt' | 'vidu' | 'image' | 'video' | 'codex' | 'gemini' 
 type PromptTemplateId = 'character-lock' | 'background-lock' | 'image-generation' | 'video-generation' | 'vidu-animation' | 'camera-work' | 'expression-variants' | 'clip-studio' | 'final-cut' | 'logic-pro' | 'chatgpt-script' | 'codex-request' | 'blank';
 type CreationMethod = 'AI生成' | '手描き' | 'Clip Studio修正' | 'Vidu生成' | 'Logic Pro制作' | 'Final Cut Pro編集' | 'その他';
 type ViewMode = 'work-list' | 'episode-list' | 'scene-list' | 'scene-edit' | 'asset-library' | 'prompt-library';
+type RecentItemType = 'work' | 'episode' | 'scene' | 'production-step' | 'asset' | 'prompt';
+type TaskPriority = '高' | '中' | '低';
+type TaskStatus = '未着手' | '作業中' | '完了';
 type ProductionStepId = 'script' | 'storyboard' | 'illustration' | 'ai-generation' | 'clip-studio' | 'final-cut' | 'logic-pro' | 'final-check';
 type ImportMode = 'add-new' | 'update-content' | 'replace-scope';
 type ExportKind = 'full-backup' | 'chatgpt-share';
@@ -124,10 +127,20 @@ type PromptItem = { id: string; title: string; aiType: PromptAiType; purpose: st
 type PromptTemplate = { id: PromptTemplateId; name: string; aiType: PromptAiType; purpose: string; initial: Partial<PromptItem>; };
 type PromptHistoryEntry = { id: string; promptId: string; changedAt: string; before: PromptItem; after: PromptItem; versionName: string; changeMemo: string; };
 
+type LastOpened = { workId: string; episodeId?: string; sceneId?: string; productionStepId?: ProductionStepId; openedAt: string };
+type RecentItem = { id: string; type: RecentItemType; itemId: string; workId?: string; episodeId?: string; sceneId?: string; productionStepId?: ProductionStepId; name: string; workName?: string; viewedAt: string };
+type TodayTask = { id: string; title: string; workId?: string; episodeId?: string; sceneId?: string; productionStepId?: ProductionStepId; priority: TaskPriority; status: TaskStatus; dueDate: string; memo: string; order: number; createdAt: string; updatedAt: string };
+type WorkSession = { id: string; workId: string; episodeId: string; sceneId: string; productionStepId: ProductionStepId; startedAt: string; endedAt?: string; durationMinutes?: number; memo?: string; nextTodo?: string };
+type AssistantRecommendationSettings = { enabled: boolean; prioritizeTodayHigh: boolean };
 type DashboardData = {
-  schemaVersion: '0.7';
+  schemaVersion: '0.8';
   appName: 'Dream Architect Studio';
   works: Work[];
+  lastOpened: LastOpened | null;
+  recentItems: RecentItem[];
+  todayTasks: TodayTask[];
+  workSessions: WorkSession[];
+  assistantRecommendationSettings: AssistantRecommendationSettings;
   createdAt: string;
   updatedAt: string;
 };
@@ -155,9 +168,10 @@ const STORAGE_KEY_V04 = 'dream-architect-studio:v0.4';
 const STORAGE_KEY_V05 = 'dream-architect-studio:v0.5';
 const STORAGE_KEY_V06 = 'dream-architect-studio:v0.6';
 const STORAGE_KEY_V07 = 'dream-architect-studio:v0.7';
+const STORAGE_KEY_V08 = 'dream-architect-studio:v0.8';
 const MIGRATION_BACKUP_KEY = 'dream-architect-studio:migration-backup:v0.2';
 const PRE_IMPORT_BACKUP_KEY = 'dream-architect-studio:pre-import-backup';
-const SCHEMA_VERSION = '0.7' as const;
+const SCHEMA_VERSION = '0.8' as const;
 
 const emptyImageReference: ImageReference = { label: '', source: '', memo: '' };
 const emptySceneText = { summary: '', tiaLine: '', novaLine: '', decisions: '', openIssues: '', memo: '' };
@@ -244,7 +258,7 @@ function createAsset(id = createId('asset')): Asset { return migrateAsset({ id, 
 function parseTags(value: string) { return value.split(',').map((tag) => tag.trim()).filter(Boolean); }
 function tagsText(tags: string[]) { return tags.join(', '); }
 function formatDate(value: string) { return value ? new Date(value).toLocaleString('ja-JP') : '未設定'; }
-function averageProgress(scenes: Scene[]) { return scenes.length ? Math.round(scenes.reduce((sum, scene) => sum + scene.progressPercent, 0) / scenes.length) : 0; }
+function averageProgress(scenes: Scene[]) { return scenes.length ? Math.round(scenes.reduce((sum, scene) => sum + calculateSceneProgress(scene.productionSteps), 0) / scenes.length) : 0; }
 function workScenes(work: Work) { return work.episodes.flatMap((episode) => episode.scenes); }
 function workProgress(work: Work) { return averageProgress(workScenes(work)); }
 function episodeProgress(episode: Episode) { return averageProgress(episode.scenes); }
@@ -287,7 +301,7 @@ function createWork(): Work { const timestamp = nowIso(); return { id: createId(
 function createDefaultDashboardData(): DashboardData {
   const timestamp = nowIso();
   const scenes = dummyScenes.map((scene, index) => migrateScene(scene, index));
-  return { schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: timestamp, updatedAt: timestamp, works: [{ id: 'work-tia-nova-production-diary', title: 'ティア・ノヴァのAIアニメ制作日誌', description: 'AIアニメ制作の試行錯誤を記録する作品。', productionStatus: inferStatus(scenes), thumbnail: { ...emptyImageReference }, tags: ['AIアニメ'], favorite: true, productionMemo: '', assetLibrary: [], promptLibrary: [], promptTemplates: defaultPromptTemplates(), promptHistory: [], episodes: [{ id: 'episode-0', episodeNumber: 0, title: '第0話', summary: '', productionStatus: inferStatus(scenes), thumbnail: { ...emptyImageReference }, tags: [], favorite: false, productionMemo: '', scenes, createdAt: timestamp, updatedAt: timestamp }], createdAt: timestamp, updatedAt: timestamp }] };
+  return withV08Defaults({ schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: timestamp, updatedAt: timestamp, works: [{ id: 'work-tia-nova-production-diary', title: 'ティア・ノヴァのAIアニメ制作日誌', description: 'AIアニメ制作の試行錯誤を記録する作品。', productionStatus: inferStatus(scenes), thumbnail: { ...emptyImageReference }, tags: ['AIアニメ'], favorite: true, productionMemo: '', assetLibrary: [], promptLibrary: [], promptTemplates: defaultPromptTemplates(), promptHistory: [], episodes: [{ id: 'episode-0', episodeNumber: 0, title: '第0話', summary: '', productionStatus: inferStatus(scenes), thumbnail: { ...emptyImageReference }, tags: [], favorite: false, productionMemo: '', scenes, createdAt: timestamp, updatedAt: timestamp }], createdAt: timestamp, updatedAt: timestamp }] });
 }
 
 function migrateV02Project(raw: unknown): DashboardData | null {
@@ -297,18 +311,24 @@ function migrateV02Project(raw: unknown): DashboardData | null {
   const timestamp = nowIso();
   const scenes = source.scenes.map((scene, index) => migrateScene(scene, index));
   const safeScenes = scenes.length > 0 ? scenes : [createScene('1')];
-  return { schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: timestamp, updatedAt: timestamp, works: [{ id: 'work-tia-nova-production-diary', title: 'ティア・ノヴァのAIアニメ制作日誌', description: source.workTitle ? `Version 0.2から移行。旧作品名：${source.workTitle}` : 'Version 0.2から移行した作品。', productionStatus: inferStatus(safeScenes), thumbnail: { ...emptyImageReference }, tags: ['移行データ'], favorite: true, productionMemo: 'Version 0.2の保存データを保持して自動移行しました。', assetLibrary: [], promptLibrary: [], promptTemplates: defaultPromptTemplates(), promptHistory: [], episodes: [{ id: 'episode-0', episodeNumber: 0, title: typeof source.episodeTitle === 'string' ? source.episodeTitle : '第0話', summary: '', productionStatus: inferStatus(safeScenes), thumbnail: { ...emptyImageReference }, tags: [], favorite: false, productionMemo: '', scenes: safeScenes, createdAt: timestamp, updatedAt: timestamp }], createdAt: timestamp, updatedAt: timestamp }] };
+  return withV08Defaults({ schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: timestamp, updatedAt: timestamp, works: [{ id: 'work-tia-nova-production-diary', title: 'ティア・ノヴァのAIアニメ制作日誌', description: source.workTitle ? `Version 0.2から移行。旧作品名：${source.workTitle}` : 'Version 0.2から移行した作品。', productionStatus: inferStatus(safeScenes), thumbnail: { ...emptyImageReference }, tags: ['移行データ'], favorite: true, productionMemo: 'Version 0.2の保存データを保持して自動移行しました。', assetLibrary: [], promptLibrary: [], promptTemplates: defaultPromptTemplates(), promptHistory: [], episodes: [{ id: 'episode-0', episodeNumber: 0, title: typeof source.episodeTitle === 'string' ? source.episodeTitle : '第0話', summary: '', productionStatus: inferStatus(safeScenes), thumbnail: { ...emptyImageReference }, tags: [], favorite: false, productionMemo: '', scenes: safeScenes, createdAt: timestamp, updatedAt: timestamp }], createdAt: timestamp, updatedAt: timestamp }] });
+}
+
+function withV08Defaults(data: Omit<DashboardData, 'lastOpened' | 'recentItems' | 'todayTasks' | 'workSessions' | 'assistantRecommendationSettings'> & Partial<DashboardData>): DashboardData {
+  return { ...data, schemaVersion: SCHEMA_VERSION, lastOpened: data.lastOpened ?? null, recentItems: Array.isArray(data.recentItems) ? data.recentItems.slice(0, 10) : [], todayTasks: Array.isArray(data.todayTasks) ? data.todayTasks : [], workSessions: Array.isArray(data.workSessions) ? data.workSessions : [], assistantRecommendationSettings: data.assistantRecommendationSettings ?? { enabled: true, prioritizeTodayHigh: true } } as DashboardData;
 }
 
 function normalizeDashboard(raw: unknown): DashboardData | null {
   if (!raw || typeof raw !== 'object') return null;
   const source = raw as Partial<DashboardData>;
-  if ((source.schemaVersion !== SCHEMA_VERSION && source.schemaVersion !== '0.6' && source.schemaVersion !== '0.5' && source.schemaVersion !== '0.4' && source.schemaVersion !== '0.3') || !Array.isArray(source.works)) return null;
+  if ((source.schemaVersion !== SCHEMA_VERSION && source.schemaVersion !== '0.7' && source.schemaVersion !== '0.6' && source.schemaVersion !== '0.5' && source.schemaVersion !== '0.4' && source.schemaVersion !== '0.3') || !Array.isArray(source.works)) return null;
   const timestamp = typeof source.updatedAt === 'string' ? source.updatedAt : nowIso();
-  return { schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: typeof source.createdAt === 'string' ? source.createdAt : timestamp, updatedAt: timestamp, works: source.works.map((work, workIndex) => ({ id: typeof work.id === 'string' ? work.id : `work-${workIndex + 1}`, title: typeof work.title === 'string' ? work.title : '新しい作品', description: typeof work.description === 'string' ? work.description : '', productionStatus: isProductionStatus(work.productionStatus) ? work.productionStatus : '未着手', thumbnail: cloneImage(work.thumbnail), tags: readTags(work.tags), favorite: Boolean(work.favorite), productionMemo: typeof work.productionMemo === 'string' ? work.productionMemo : '', assetLibrary: Array.isArray((work as any).assetLibrary) ? (work as any).assetLibrary.map((asset: any, assetIndex: number) => migrateAsset(asset, assetIndex)) : [], promptLibrary: Array.isArray((work as any).promptLibrary) ? (work as any).promptLibrary.map((prompt: any, promptIndex: number) => migratePrompt(prompt, promptIndex)) : [], promptTemplates: Array.isArray((work as any).promptTemplates) ? (work as any).promptTemplates : defaultPromptTemplates(), promptHistory: migratePromptHistory((work as any).promptHistory), createdAt: typeof work.createdAt === 'string' ? work.createdAt : timestamp, updatedAt: typeof work.updatedAt === 'string' ? work.updatedAt : timestamp, episodes: Array.isArray(work.episodes) && work.episodes.length ? work.episodes.map((episode, episodeIndex) => ({ id: typeof episode.id === 'string' ? episode.id : `episode-${episodeIndex}`, episodeNumber: typeof episode.episodeNumber === 'number' ? episode.episodeNumber : episodeIndex, title: typeof episode.title === 'string' ? episode.title : `第${episodeIndex}話`, summary: typeof episode.summary === 'string' ? episode.summary : '', productionStatus: isProductionStatus(episode.productionStatus) ? episode.productionStatus : '未着手', thumbnail: cloneImage(episode.thumbnail), tags: readTags(episode.tags), favorite: Boolean(episode.favorite), productionMemo: typeof episode.productionMemo === 'string' ? episode.productionMemo : '', scenes: Array.isArray(episode.scenes) && episode.scenes.length ? episode.scenes.map((scene, sceneIndex) => migrateScene(scene, sceneIndex)) : [createScene()], createdAt: typeof episode.createdAt === 'string' ? episode.createdAt : timestamp, updatedAt: typeof episode.updatedAt === 'string' ? episode.updatedAt : timestamp })) : [createEpisode(0)] })) };
+  return withV08Defaults({ schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: typeof source.createdAt === 'string' ? source.createdAt : timestamp, updatedAt: timestamp, works: source.works.map((work, workIndex) => ({ id: typeof work.id === 'string' ? work.id : `work-${workIndex + 1}`, title: typeof work.title === 'string' ? work.title : '新しい作品', description: typeof work.description === 'string' ? work.description : '', productionStatus: isProductionStatus(work.productionStatus) ? work.productionStatus : '未着手', thumbnail: cloneImage(work.thumbnail), tags: readTags(work.tags), favorite: Boolean(work.favorite), productionMemo: typeof work.productionMemo === 'string' ? work.productionMemo : '', assetLibrary: Array.isArray((work as any).assetLibrary) ? (work as any).assetLibrary.map((asset: any, assetIndex: number) => migrateAsset(asset, assetIndex)) : [], promptLibrary: Array.isArray((work as any).promptLibrary) ? (work as any).promptLibrary.map((prompt: any, promptIndex: number) => migratePrompt(prompt, promptIndex)) : [], promptTemplates: Array.isArray((work as any).promptTemplates) ? (work as any).promptTemplates : defaultPromptTemplates(), promptHistory: migratePromptHistory((work as any).promptHistory), createdAt: typeof work.createdAt === 'string' ? work.createdAt : timestamp, updatedAt: typeof work.updatedAt === 'string' ? work.updatedAt : timestamp, episodes: Array.isArray(work.episodes) && work.episodes.length ? work.episodes.map((episode, episodeIndex) => ({ id: typeof episode.id === 'string' ? episode.id : `episode-${episodeIndex}`, episodeNumber: typeof episode.episodeNumber === 'number' ? episode.episodeNumber : episodeIndex, title: typeof episode.title === 'string' ? episode.title : `第${episodeIndex}話`, summary: typeof episode.summary === 'string' ? episode.summary : '', productionStatus: isProductionStatus(episode.productionStatus) ? episode.productionStatus : '未着手', thumbnail: cloneImage(episode.thumbnail), tags: readTags(episode.tags), favorite: Boolean(episode.favorite), productionMemo: typeof episode.productionMemo === 'string' ? episode.productionMemo : '', scenes: Array.isArray(episode.scenes) && episode.scenes.length ? episode.scenes.map((scene, sceneIndex) => migrateScene(scene, sceneIndex)) : [createScene()], createdAt: typeof episode.createdAt === 'string' ? episode.createdAt : timestamp, updatedAt: typeof episode.updatedAt === 'string' ? episode.updatedAt : timestamp })) : [createEpisode(0)] })) });
 }
 
 function loadInitialData(): DashboardData {
+  const savedV08 = localStorage.getItem(STORAGE_KEY_V08);
+  if (savedV08) { try { return normalizeDashboard(JSON.parse(savedV08)) ?? createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV07 = localStorage.getItem(STORAGE_KEY_V07);
   if (savedV07) { try { return normalizeDashboard(JSON.parse(savedV07)) ?? createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV06 = localStorage.getItem(STORAGE_KEY_V06);
@@ -318,16 +338,51 @@ function loadInitialData(): DashboardData {
   const savedV04 = localStorage.getItem(STORAGE_KEY_V04);
   if (savedV04) { try { return normalizeDashboard(JSON.parse(savedV04)) ?? createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV03 = localStorage.getItem(STORAGE_KEY_V03);
-  if (savedV03) { try { const migrated = normalizeDashboard(JSON.parse(savedV03)); if (migrated) { localStorage.setItem(STORAGE_KEY_V07, JSON.stringify(migrated)); return migrated; } return createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
+  if (savedV03) { try { const migrated = normalizeDashboard(JSON.parse(savedV03)); if (migrated) { localStorage.setItem(STORAGE_KEY_V08, JSON.stringify(migrated)); return migrated; } return createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV02 = localStorage.getItem(STORAGE_KEY_V02);
   if (savedV02) {
     try {
       localStorage.setItem(MIGRATION_BACKUP_KEY, JSON.stringify({ backedUpAt: nowIso(), storageKey: STORAGE_KEY_V02, raw: savedV02 }));
       const migrated = migrateV02Project(JSON.parse(savedV02));
-      if (migrated) { localStorage.setItem(STORAGE_KEY_V07, JSON.stringify(migrated)); return migrated; }
+      if (migrated) { localStorage.setItem(STORAGE_KEY_V08, JSON.stringify(migrated)); return migrated; }
     } catch { /* Keep the old key untouched and fall back to default v0.3 data. */ }
   }
   return createDefaultDashboardData();
+}
+
+function findContext(data: DashboardData, ids?: Partial<LastOpened>) {
+  const work = data.works.find((w) => w.id === ids?.workId);
+  const episode = work?.episodes.find((e) => e.id === ids?.episodeId);
+  const scene = episode?.scenes.find((sc) => sc.id === ids?.sceneId);
+  const step = scene?.productionSteps.find((st) => st.id === ids?.productionStepId);
+  return { work, episode, scene, step };
+}
+function fallbackResume(data: DashboardData): LastOpened | null {
+  let best: { work: Work; episode: Episode; scene: Scene } | null = null;
+  data.works.forEach((work) => work.episodes.forEach((episode) => episode.scenes.forEach((scene) => {
+    if (scene.productionStatus === '完了') return;
+    if (!best || scene.updatedAt > best.scene.updatedAt) best = { work, episode, scene };
+  })));
+  if (!best) return null;
+  const chosen = best as { work: Work; episode: Episode; scene: Scene };
+  return { workId: chosen.work.id, episodeId: chosen.episode.id, sceneId: chosen.scene.id, productionStepId: chosen.scene.productionSteps.find((step: ProductionStep) => step.status !== '完了')?.id, openedAt: chosen.scene.updatedAt };
+}
+function progressStats(data: DashboardData, current?: Work) {
+  const scenes = data.works.flatMap(workScenes);
+  const steps = scenes.flatMap((s) => s.productionSteps);
+  return { average: averageProgress(scenes), current: current ? workProgress(current) : 0, notStarted: scenes.filter((s) => s.productionStatus === '未着手').length, working: scenes.filter((s) => s.productionStatus === '作業中' || s.productionStatus === '確認中').length, done: scenes.filter((s) => s.productionStatus === '完了').length, incompleteSteps: steps.filter((s) => s.status !== '完了').length };
+}
+function recommendation(data: DashboardData) {
+  const high = data.todayTasks.filter((t) => t.priority === '高' && t.status !== '完了').sort((a,b)=>a.order-b.order)[0];
+  if (high) return { ids: high, title: high.title, reason: '今日やることに優先度「高」で登録されています。' };
+  const candidates: Array<{ ids: LastOpened; title: string; reason: string; score: number }> = [];
+  data.works.forEach((work) => work.episodes.forEach((episode) => episode.scenes.forEach((scene) => {
+    const working = scene.productionSteps.find((s) => s.status === '作業中' || s.status === '確認中');
+    if (working) candidates.push({ ids:{workId:work.id,episodeId:episode.id,sceneId:scene.id,productionStepId:working.id,openedAt:working.updatedAt}, title: working.name, reason: `${episode.title}・${scene.title}は${working.name}が作業中です。続きを進めましょう。`, score: 500 + Date.parse(working.updatedAt)/1e13 });
+    const next = scene.productionSteps.find((s,i)=>s.status !== '完了' && scene.productionSteps.slice(0,i).every((p)=>p.status==='完了'));
+    if (next) candidates.push({ ids:{workId:work.id,episodeId:episode.id,sceneId:scene.id,productionStepId:next.id,openedAt:scene.updatedAt}, title: next.name, reason: `${episode.title}・${scene.title}は前工程が整っています。次は${next.name}がおすすめです。`, score: 300 + scene.progressPercent + Date.parse(scene.updatedAt)/1e13 });
+  })));
+  return candidates.sort((a,b)=>b.score-a.score)[0] ?? null;
 }
 
 function downloadJson(data: unknown, filename: string) { const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
@@ -335,9 +390,9 @@ function downloadJson(data: unknown, filename: string) { const blob = new Blob([
 export function App() {
   const [dashboard, setDashboard] = useState<DashboardData>(loadInitialData);
   const [viewMode, setViewMode] = useState<ViewMode>('work-list');
-  const [selectedWorkId, setSelectedWorkId] = useState(dashboard.works[0]?.id ?? null);
-  const [selectedEpisodeId, setSelectedEpisodeId] = useState(dashboard.works[0]?.episodes[0]?.id ?? null);
-  const [selectedSceneId, setSelectedSceneId] = useState(dashboard.works[0]?.episodes[0]?.scenes[0]?.id ?? null);
+  const [selectedWorkId, setSelectedWorkId] = useState<string | null>(dashboard.works[0]?.id ?? null);
+  const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(dashboard.works[0]?.episodes[0]?.id ?? null);
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(dashboard.works[0]?.episodes[0]?.scenes[0]?.id ?? null);
   const [jsonPanelOpen, setJsonPanelOpen] = useState(false);
   const [exportKind, setExportKind] = useState<ExportKind>('full-backup');
   const [exportScope, setExportScope] = useState<ExportScope>('all');
@@ -349,7 +404,8 @@ export function App() {
   const [selectedExportPromptIds, setSelectedExportPromptIds] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { localStorage.setItem(STORAGE_KEY_V07, JSON.stringify(dashboard)); }, [dashboard]);
+  const [lastSavedAt, setLastSavedAt] = useState('');
+  useEffect(() => { const id = window.setTimeout(() => { localStorage.setItem(STORAGE_KEY_V08, JSON.stringify(dashboard)); setLastSavedAt(nowIso()); }, 350); return () => window.clearTimeout(id); }, [dashboard]);
 
   const selectedWork = dashboard.works.find((work) => work.id === selectedWorkId) ?? dashboard.works[0];
   const selectedEpisode = selectedWork?.episodes.find((episode) => episode.id === selectedEpisodeId) ?? selectedWork?.episodes[0];
@@ -360,9 +416,11 @@ export function App() {
   const updateSelectedEpisode = (patch: Partial<Episode>) => { if (!selectedWork || !selectedEpisode) return; mutateDashboard((current) => ({ ...current, works: current.works.map((work) => work.id !== selectedWork.id ? work : { ...work, updatedAt: nowIso(), episodes: work.episodes.map((episode) => episode.id === selectedEpisode.id ? { ...episode, ...patch, updatedAt: nowIso() } : episode) }) })); };
   const updateSelectedScene = <K extends keyof Scene>(key: K, value: Scene[K]) => { if (!selectedWork || !selectedEpisode || !selectedScene) return; mutateDashboard((current) => ({ ...current, works: current.works.map((work) => work.id !== selectedWork.id ? work : { ...work, updatedAt: nowIso(), episodes: work.episodes.map((episode) => episode.id !== selectedEpisode.id ? episode : { ...episode, updatedAt: nowIso(), scenes: episode.scenes.map((scene) => { if (scene.id !== selectedScene.id) return scene; const next = { ...scene, [key]: value, updatedAt: nowIso() } as Scene; if (key === 'productionSteps') { next.progressPercent = calculateSceneProgress(next.productionSteps); next.productionStatus = inferSceneStatusFromSteps(next.productionSteps); } return next; }) }) }) })); };
 
-  const openWork = (work: Work) => { setSelectedWorkId(work.id); setSelectedEpisodeId(work.episodes[0]?.id ?? null); setSelectedSceneId(work.episodes[0]?.scenes[0]?.id ?? null); setViewMode('episode-list'); };
-  const openEpisode = (episode: Episode) => { setSelectedEpisodeId(episode.id); setSelectedSceneId(episode.scenes[0]?.id ?? null); setViewMode('scene-list'); };
-  const openScene = (scene: Scene) => { setSelectedSceneId(scene.id); setViewMode('scene-edit'); };
+  const recordOpen = (ids: LastOpened, item: Omit<RecentItem, 'id' | 'viewedAt'>) => mutateDashboard((current) => ({ ...current, lastOpened: ids, recentItems: [{ ...item, id: `${item.type}:${item.itemId}`, viewedAt: ids.openedAt }, ...current.recentItems.filter((r) => r.id !== `${item.type}:${item.itemId}`)].slice(0, 10) }));
+  const goTo = (ids: Partial<LastOpened>) => { const ctx = findContext(dashboard, ids); if (!ctx.work) return; setSelectedWorkId(ctx.work.id); setSelectedEpisodeId(ctx.episode?.id ?? ctx.work.episodes[0]?.id ?? null); setSelectedSceneId(ctx.scene?.id ?? ctx.episode?.scenes[0]?.id ?? null); setViewMode(ctx.scene ? 'scene-edit' : ctx.episode ? 'scene-list' : 'episode-list'); };
+  const openWork = (work: Work) => { setSelectedWorkId(work.id); setSelectedEpisodeId(work.episodes[0]?.id ?? null); setSelectedSceneId(work.episodes[0]?.scenes[0]?.id ?? null); setViewMode('episode-list'); recordOpen({ workId: work.id, openedAt: nowIso() }, { type: 'work', itemId: work.id, workId: work.id, name: work.title, workName: work.title }); };
+  const openEpisode = (episode: Episode) => { setSelectedEpisodeId(episode.id); setSelectedSceneId(episode.scenes[0]?.id ?? null); setViewMode('scene-list'); if (selectedWork) recordOpen({ workId: selectedWork.id, episodeId: episode.id, openedAt: nowIso() }, { type: 'episode', itemId: episode.id, workId: selectedWork.id, episodeId: episode.id, name: episode.title, workName: selectedWork.title }); };
+  const openScene = (scene: Scene) => { setSelectedSceneId(scene.id); setViewMode('scene-edit'); if (selectedWork && selectedEpisode) recordOpen({ workId: selectedWork.id, episodeId: selectedEpisode.id, sceneId: scene.id, openedAt: nowIso() }, { type: 'scene', itemId: scene.id, workId: selectedWork.id, episodeId: selectedEpisode.id, sceneId: scene.id, name: scene.title, workName: selectedWork.title }); };
 
   const addWork = () => { const work = createWork(); mutateDashboard((current) => ({ ...current, works: [...current.works, work] })); openWork(work); };
   const deleteWork = (workId: string) => { if (dashboard.works.length <= 1) return window.alert('最後の1作品は削除できません。'); const work = dashboard.works.find((item) => item.id === workId); if (!work || !window.confirm(`作品「${work.title}」を削除します。元に戻せません。よろしいですか？`)) return; mutateDashboard((current) => ({ ...current, works: current.works.filter((item) => item.id !== workId) })); setViewMode('work-list'); };
@@ -406,7 +464,7 @@ export function App() {
     const data = kind === 'chatgpt-share' ? stripForChatGpt(rawData) : rawData;
     return { schemaVersion: SCHEMA_VERSION, exportType: kind, scope, exportedAt: nowIso(), ...context, data };
   };
-  const exportJson = () => { const data = buildExportData(exportKind, exportScope); downloadJson(data, `dream-architect-studio-${exportKind}-${exportScope}-v0.7.json`); };
+  const exportJson = () => { const data = buildExportData(exportKind, exportScope); downloadJson(data, `dream-architect-studio-${exportKind}-${exportScope}-v0.8.json`); };
   const copyJson = async () => { try { await navigator.clipboard.writeText(JSON.stringify(buildExportData(exportKind, exportScope), null, 2)); setMessage('JSONをクリップボードへコピーしました。'); } catch { setMessage('クリップボードへコピーできませんでした。書き出しボタンを使用してください。'); } };
 
   const applyImport = (text: string) => {
@@ -428,18 +486,27 @@ export function App() {
     setMessage('JSONを読み込みました。実行前バックアップをlocalStorageへ保存しました。');
   };
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; const text = await file.text(); setPastedJson(text); applyImport(text); event.target.value = ''; };
+  const resumeTarget = findContext(dashboard, dashboard.workSessions.find((s) => !s.endedAt) ?? dashboard.lastOpened ?? undefined).scene ? (dashboard.workSessions.find((s) => !s.endedAt) ?? dashboard.lastOpened) : fallbackResume(dashboard);
+  const rec = recommendation(dashboard);
+  const addTask = () => mutateDashboard((current) => ({ ...current, todayTasks: [...current.todayTasks, { id: createId('task'), title: '新しい作業', priority: '中', status: '未着手', dueDate: new Date().toISOString().slice(0,10), memo: '', order: current.todayTasks.length, createdAt: nowIso(), updatedAt: nowIso() }] }));
+  const updateTask = (id: string, patch: Partial<TodayTask>) => mutateDashboard((current) => ({ ...current, todayTasks: current.todayTasks.map((t) => t.id === id ? { ...t, ...patch, updatedAt: nowIso() } : t) }));
+  const deleteTask = (id: string) => mutateDashboard((current) => ({ ...current, todayTasks: current.todayTasks.filter((t) => t.id !== id) }));
+  const moveTask = (id: string, dir: -1 | 1) => mutateDashboard((current) => { const tasks = [...current.todayTasks].sort((a,b)=>a.order-b.order); const i = tasks.findIndex((t)=>t.id===id); const j = i + dir; if (i < 0 || j < 0 || j >= tasks.length) return current; [tasks[i], tasks[j]] = [tasks[j], tasks[i]]; return { ...current, todayTasks: tasks.map((t, order)=>({ ...t, order })) }; });
+  const startSession = (stepId: ProductionStepId) => { if (!selectedWork || !selectedEpisode || !selectedScene) return; mutateDashboard((current) => ({ ...current, lastOpened: { workId: selectedWork.id, episodeId: selectedEpisode.id, sceneId: selectedScene.id, productionStepId: stepId, openedAt: nowIso() }, workSessions: [...current.workSessions.filter((s)=>s.endedAt), { id: createId('session'), workId: selectedWork.id, episodeId: selectedEpisode.id, sceneId: selectedScene.id, productionStepId: stepId, startedAt: nowIso() }] })); };
+  const endSession = (memo: string, nextTodo: string) => mutateDashboard((current) => ({ ...current, workSessions: current.workSessions.map((s) => s.endedAt ? s : { ...s, endedAt: nowIso(), memo, nextTodo, durationMinutes: Math.max(1, Math.round((Date.now() - Date.parse(s.startedAt)) / 60000)) }) }));
 
   return <main className="app">
-    <header className="app-header"><div><p className="eyebrow">Dream Architect Studio</p><h1>AIアニメ制作ダッシュボード v0.7</h1></div><button onClick={() => setJsonPanelOpen((open) => !open)}>JSON連携</button></header>
+    <header className="app-header"><div><p className="eyebrow">Dream Architect Studio</p><h1>AIアニメ制作ダッシュボード v0.8</h1><p className="muted">最終保存：{lastSavedAt ? formatDate(lastSavedAt) : '保存待ち'}</p></div><button onClick={() => setJsonPanelOpen((open) => !open)}>JSON連携</button></header>
     <Breadcrumbs viewMode={viewMode} work={selectedWork} episode={selectedEpisode} scene={selectedScene} onWorks={() => setViewMode('work-list')} onEpisodes={() => setViewMode('episode-list')} onScenes={() => setViewMode('scene-list')} />
     {jsonPanelOpen && <section className="panel import-panel"><h2>JSON連携</h2><div className="form-grid"><label className="field"><span>種類</span><select value={exportKind} onChange={(event) => setExportKind(event.target.value as ExportKind)}><option value="full-backup">完全バックアップJSON</option><option value="chatgpt-share">ChatGPT共有JSON</option></select></label><label className="field"><span>範囲</span><select value={exportScope} onChange={(event) => setExportScope(event.target.value as ExportScope)}><option value="all">全体</option><option value="work">作品</option><option value="prompt-library">プロンプトライブラリ</option><option value="selected-prompts">選択したプロンプト</option><option value="asset-library">アセットライブラリ</option><option value="episode">話数</option><option value="scene">場面</option><option value="production-step">制作工程</option><option value="asset">アセット</option><option value="selected-assets">選択したアセット</option></select></label><label className="field"><span>読み込み方式</span><select value={importMode} onChange={(event) => setImportMode(event.target.value as ImportMode)}><option value="add-new">新規だけ追加</option><option value="update-content">一致IDを更新</option><option value="replace-scope">選択範囲を置き換え</option></select></label></div>{exportScope === 'selected-prompts' && selectedWork && <PromptSelector prompts={selectedWork.promptLibrary} selectedIds={selectedExportPromptIds} onChange={setSelectedExportPromptIds} title="共有するプロンプト" />}
     {exportScope === 'selected-assets' && selectedWork && <AssetSelector assets={selectedWork.assetLibrary} selectedIds={selectedExportAssetIds} onChange={setSelectedExportAssetIds} title="共有するアセット" />}<div className="actions"><button onClick={exportJson}>JSON書き出し</button><button onClick={copyJson}>JSONをコピー</button><button onClick={() => fileInputRef.current?.click()}>JSONファイル読み込み</button><input ref={fileInputRef} type="file" accept="application/json" hidden onChange={importFile} /></div><textarea className="json-paste" value={pastedJson} onChange={(event) => setPastedJson(event.target.value)} placeholder="ここにChatGPT共有JSONまたはバックアップJSONを貼り付け" /><div className="actions"><button onClick={() => applyImport(pastedJson)}>貼り付けたJSONを読み込む</button></div>{message && <p className="status-message">{message}</p>}</section>}
+    {viewMode === 'work-list' && <HomeDashboard dashboard={dashboard} selectedWork={selectedWork} resumeTarget={resumeTarget} recommendationItem={rec} onGoTo={goTo} onAddTask={addTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onMoveTask={moveTask} />}
     {viewMode === 'work-list' && <WorkList works={dashboard.works} onAdd={addWork} onOpen={openWork} onDelete={deleteWork} onSelect={(work) => { setSelectedWorkId(work.id); setSelectedEpisodeId(work.episodes[0]?.id ?? null); setSelectedSceneId(work.episodes[0]?.scenes[0]?.id ?? null); }} />}
     {viewMode === 'episode-list' && selectedWork && <EpisodeList work={selectedWork} onOpenAssetLibrary={() => setViewMode('asset-library')} onOpenPromptLibrary={() => setViewMode('prompt-library')} onAdd={addEpisode} onOpen={openEpisode} onDelete={deleteEpisode} onMove={moveEpisode} onUpdate={updateSelectedWork} />}
     {viewMode === 'prompt-library' && selectedWork && <PromptLibrary work={selectedWork} selectedExportPromptIds={selectedExportPromptIds} setSelectedExportPromptIds={setSelectedExportPromptIds} usageFor={promptUsage} onAdd={addPrompt} onUpdate={updatePrompt} onDelete={deletePrompt} onRestore={restorePrompt} />}
     {viewMode === 'asset-library' && selectedWork && <AssetLibrary work={selectedWork} selectedExportAssetIds={selectedExportAssetIds} setSelectedExportAssetIds={setSelectedExportAssetIds} usageFor={assetUsage} onAdd={addLibraryAsset} onUpdate={updateLibraryAsset} onDelete={deleteLibraryAsset} />}
     {viewMode === 'scene-list' && selectedWork && selectedEpisode && <SceneList episode={selectedEpisode} onAdd={addScene} onOpen={openScene} onDelete={deleteScene} onMove={moveScene} draggedId={draggedId} setDraggedId={setDraggedId} handleTouchReorder={handleTouchReorder} onUpdate={updateSelectedEpisode} />}
-    {viewMode === 'scene-edit' && selectedScene && <SceneEditor scene={selectedScene} libraryAssets={selectedWork?.assetLibrary ?? []} promptLibrary={selectedWork?.promptLibrary ?? []} onUpdate={updateSelectedScene} onDelete={() => deleteScene(selectedScene.id)} onAddAsset={addAsset} onUpdateAsset={updateAsset} onDeleteAsset={deleteAsset} />}
+    {viewMode === 'scene-edit' && selectedScene && <SceneEditor activeSession={dashboard.workSessions.find((s)=>!s.endedAt && s.sceneId===selectedScene.id)} onStartSession={startSession} onEndSession={endSession} scene={selectedScene} libraryAssets={selectedWork?.assetLibrary ?? []} promptLibrary={selectedWork?.promptLibrary ?? []} onUpdate={updateSelectedScene} onDelete={() => deleteScene(selectedScene.id)} onAddAsset={addAsset} onUpdateAsset={updateAsset} onDeleteAsset={deleteAsset} />}
   </main>;
 }
 
@@ -495,6 +562,19 @@ function importScoped(current: DashboardData, scope: ExportScope, incoming: unkn
   return current;
 }
 
+function HomeDashboard({ dashboard, selectedWork, resumeTarget, recommendationItem, onGoTo, onAddTask, onUpdateTask, onDeleteTask, onMoveTask }: { dashboard: DashboardData; selectedWork?: Work; resumeTarget: LastOpened | WorkSession | null | undefined; recommendationItem: any; onGoTo: (ids: Partial<LastOpened>) => void; onAddTask: () => void; onUpdateTask: (id: string, patch: Partial<TodayTask>) => void; onDeleteTask: (id: string) => void; onMoveTask: (id: string, dir: -1 | 1) => void }) {
+  const ctx = findContext(dashboard, resumeTarget ?? undefined); const stats = progressStats(dashboard, selectedWork); const [showDone, setShowDone] = useState(false); const today = new Date().toISOString().slice(0,10);
+  const tasks = [...dashboard.todayTasks].sort((a,b)=>a.order-b.order).filter((t)=>showDone || t.status !== '完了').filter((t)=>!t.dueDate || t.dueDate <= today || t.status !== '完了');
+  return <section className="home-top">
+    <details open className="panel resume-panel"><summary>制作を再開する</summary>{ctx.work && ctx.episode && ctx.scene ? <div><h2>{ctx.work.title}</h2><p>{ctx.episode.title} / {ctx.scene.title} / {ctx.step?.name ?? '場面全体'}</p><p className="muted">前回：{formatDate((resumeTarget as any)?.startedAt ?? (resumeTarget as any)?.openedAt)}</p><button className="primary-action" onClick={()=>onGoTo(resumeTarget ?? {})}>続きから始める</button></div> : <p>未着手の場面を選んで制作を始めましょう。</p>}</details>
+    <details open className="panel nova-panel"><summary>ノヴァのおすすめ</summary>{recommendationItem ? <div><h2>ノヴァのおすすめ</h2><p>{recommendationItem.reason}</p><button onClick={()=>onGoTo(recommendationItem.ids)}>この作業を始める</button></div> : <p>未着手の場面を選んで制作を始めましょう。</p>}</details>
+    <details open className="panel"><summary>制作進捗</summary><div className="progress-summary"><strong>全作品平均 {stats.average}%</strong><ProgressBar value={stats.average}/><strong>現在の作品 {stats.current}%</strong><ProgressBar value={stats.current}/><MetaList items={[`未着手場面：${stats.notStarted}`,`作業中場面：${stats.working}`,`完成場面：${stats.done}`,`未完了工程：${stats.incompleteSteps}`]} />{dashboard.works.map((w)=><p key={w.id}>{w.title}: {workProgress(w)}%<ProgressBar value={workProgress(w)}/></p>)}</div></details>
+    <details open className="panel"><summary>今日やること</summary><div className="actions"><button onClick={onAddTask}>＋追加</button><button onClick={()=>setShowDone(!showDone)}>{showDone?'完了を折りたたむ':'完了も表示'}</button></div>{tasks.map((t,i)=><article className={`task-card ${t.dueDate && t.dueDate < today && t.status !== '完了' ? 'overdue' : ''}`} key={t.id}><Field label="タイトル" value={t.title} onChange={(title)=>onUpdateTask(t.id,{title})}/><div className="form-grid"><label className="field"><span>優先度</span><select value={t.priority} onChange={(e)=>onUpdateTask(t.id,{priority:e.target.value as TaskPriority})}><option>高</option><option>中</option><option>低</option></select></label><label className="field"><span>状態</span><select value={t.status} onChange={(e)=>onUpdateTask(t.id,{status:e.target.value as TaskStatus})}><option>未着手</option><option>作業中</option><option>完了</option></select></label><Field label="予定日" value={t.dueDate} onChange={(dueDate)=>onUpdateTask(t.id,{dueDate})}/></div><TextArea label="メモ" value={t.memo} onChange={(memo)=>onUpdateTask(t.id,{memo})}/><div className="actions"><button onClick={()=>onUpdateTask(t.id,{status:t.status==='完了'?'未着手':'完了'})}>完了切り替え</button><button onClick={()=>onMoveTask(t.id,-1)} disabled={i===0}>上へ</button><button onClick={()=>onMoveTask(t.id,1)} disabled={i===tasks.length-1}>下へ</button>{t.workId && <button onClick={()=>onGoTo(t)}>対象へ移動</button>}<button className="danger" onClick={()=>onDeleteTask(t.id)}>削除</button></div></article>)}</details>
+    <details open className="panel"><summary>最近使った項目</summary>{dashboard.recentItems.length ? dashboard.recentItems.map((r)=><button key={r.id} className="recent-row" onClick={()=>onGoTo(r)}><strong>{r.type}</strong><span>{r.name}</span><span>{r.workName}</span><span>{formatDate(r.viewedAt)}</span></button>) : <p className="muted">最近使った項目はまだありません。</p>}</details>
+  </section>;
+}
+function WorkSessionBox({ activeSession, selectedStep, onStart, onEnd }: { activeSession?: WorkSession; selectedStep: ProductionStep; onStart: (id: ProductionStepId) => void; onEnd: (memo: string, nextTodo: string) => void }) { const [memo,setMemo]=useState(''); const [next,setNext]=useState(''); return <div className="session-box">{activeSession ? <><p>作業中：{formatDate(activeSession.startedAt)}</p><TextArea label="作業メモ" value={memo} onChange={setMemo}/><TextArea label="次回やること" value={next} onChange={setNext}/><button onClick={()=>onEnd(memo,next)}>作業終了</button></> : <button onClick={()=>onStart(selectedStep.id)}>作業開始</button>}</div>; }
+
 function Breadcrumbs({ viewMode, work, episode, scene, onWorks, onEpisodes, onScenes }: { viewMode: ViewMode; work?: Work; episode?: Episode; scene?: Scene; onWorks: () => void; onEpisodes: () => void; onScenes: () => void }) {
   return <nav className="breadcrumbs" aria-label="現在位置"><button onClick={onWorks}>作品一覧</button>{viewMode !== 'work-list' && work && <><span>›</span><button onClick={onEpisodes}>{work.title}</button></>}{(viewMode === 'scene-list' || viewMode === 'scene-edit') && episode && <><span>›</span><button onClick={onScenes}>{episode.title}</button></>}{viewMode === 'scene-edit' && scene && <><span>›</span><strong>{scene.title}</strong></>}</nav>;
 }
@@ -512,7 +592,7 @@ function SceneList({ episode, onAdd, onOpen, onDelete, onMove, draggedId, setDra
   function moveByDrop(fromId: string, targetId: string) { const from = episode.scenes.findIndex((scene) => scene.id === fromId); const to = episode.scenes.findIndex((scene) => scene.id === targetId); if (from < to) { for (let i = from; i < to; i += 1) onMove(fromId, 1); } else { for (let i = from; i > to; i -= 1) onMove(fromId, -1); } }
 }
 
-function SceneEditor({ scene, libraryAssets, promptLibrary, onUpdate, onDelete, onAddAsset, onUpdateAsset, onDeleteAsset }: { scene: Scene; libraryAssets: Asset[]; promptLibrary: PromptItem[]; onUpdate: <K extends keyof Scene>(key: K, value: Scene[K]) => void; onDelete: () => void; onAddAsset: () => void; onUpdateAsset: (assetId: string, patch: Partial<Asset>) => void; onDeleteAsset: (assetId: string) => void }) {
+function SceneEditor({ scene, libraryAssets, promptLibrary, activeSession, onStartSession, onEndSession, onUpdate, onDelete, onAddAsset, onUpdateAsset, onDeleteAsset }: { scene: Scene; libraryAssets: Asset[]; promptLibrary: PromptItem[]; activeSession?: WorkSession; onStartSession: (stepId: ProductionStepId) => void; onEndSession: (memo: string, nextTodo: string) => void; onUpdate: <K extends keyof Scene>(key: K, value: Scene[K]) => void; onDelete: () => void; onAddAsset: () => void; onUpdateAsset: (assetId: string, patch: Partial<Asset>) => void; onDeleteAsset: (assetId: string) => void }) {
   const [selectedStepId, setSelectedStepId] = useState<ProductionStepId>(scene.productionSteps[0]?.id ?? 'script');
   const selectedStep = scene.productionSteps.find((step) => step.id === selectedStepId) ?? scene.productionSteps[0];
   const updateStep = (patch: Partial<ProductionStep>) => {
@@ -523,13 +603,13 @@ function SceneEditor({ scene, libraryAssets, promptLibrary, onUpdate, onDelete, 
     <section className="panel scene-detail"><div className="section-heading"><h2>場面編集</h2><button className="danger" onClick={onDelete}>この場面を削除</button></div><Field label="場面タイトル" value={scene.title} onChange={(value) => onUpdate('title', value)} /><TextArea label="概要" value={scene.summary} onChange={(value) => onUpdate('summary', value)} /><TextArea label="ティアのセリフ" value={scene.tiaLine} onChange={(value) => onUpdate('tiaLine', value)} /><TextArea label="ノヴァのセリフ" value={scene.novaLine} onChange={(value) => onUpdate('novaLine', value)} /><TextArea label="決定事項" value={scene.decisions} onChange={(value) => onUpdate('decisions', value)} /><TextArea label="未決定事項" value={scene.openIssues} onChange={(value) => onUpdate('openIssues', value)} /><TextArea label="メモ" value={scene.memo} onChange={(value) => onUpdate('memo', value)} /><CommonFields entity={scene} onChange={(patch) => { if (patch.thumbnail) onUpdate('thumbnail', patch.thumbnail as ImageReference); if (patch.tags) onUpdate('tags', patch.tags as string[]); if (typeof patch.favorite === 'boolean') onUpdate('favorite', patch.favorite); if (typeof patch.productionMemo === 'string') onUpdate('productionMemo', patch.productionMemo); }} /><div className="readonly-progress"><span>制作状態：{scene.productionStatus}</span><span>工程から自動計算：{scene.progressPercent}%</span><ProgressBar value={scene.progressPercent} /></div><label className="field"><span>Vidu難易度</span><select value={scene.viduDifficulty} onChange={(event) => onUpdate('viduDifficulty', event.target.value as ViduDifficulty)}><option>低</option><option>中</option><option>高</option></select></label></section>
     <AssetSelector assets={libraryAssets} selectedIds={scene.assetIds} onChange={(assetIds) => onUpdate('assetIds', assetIds)} title="登場・使用アセット" />
     <PromptSelector prompts={promptLibrary} selectedIds={scene.promptIds} onChange={(promptIds) => onUpdate('promptIds', promptIds)} title="使用プロンプト" />
-    <ProductionStepPanel assets={libraryAssets} prompts={promptLibrary} steps={scene.productionSteps} selectedStep={selectedStep} onSelect={setSelectedStepId} onUpdate={updateStep} />
+    <ProductionStepPanel assets={libraryAssets} prompts={promptLibrary} steps={scene.productionSteps} selectedStep={selectedStep} activeSession={activeSession} onStartSession={onStartSession} onEndSession={onEndSession} onSelect={setSelectedStepId} onUpdate={updateStep} />
     <AssetList assets={scene.assets} prompts={promptLibrary} onAdd={onAddAsset} onUpdate={onUpdateAsset} onDelete={onDeleteAsset} />
   </>;
 }
 
-function ProductionStepPanel({ assets, prompts, steps, selectedStep, onSelect, onUpdate }: { assets: Asset[]; prompts: PromptItem[]; steps: ProductionStep[]; selectedStep?: ProductionStep; onSelect: (id: ProductionStepId) => void; onUpdate: (patch: Partial<ProductionStep>) => void }) {
-  return <section className="panel step-panel"><div className="section-heading"><div><h2>制作工程管理</h2><p className="muted">8工程の状態から場面の進捗率を自動計算します。</p></div></div><div className="step-grid">{steps.map((step, index) => <button key={step.id} type="button" className={`step-card ${selectedStep?.id === step.id ? 'active' : ''}`} onClick={() => onSelect(step.id)}><span className="step-number">{index + 1}</span><strong>{step.name}</strong><StatusBadge status={step.status} /><small>素材：{step.relatedAssets ? 'あり' : '未設定'} / プロンプト：{step.relatedPrompts ? 'あり' : '未設定'}</small></button>)}</div>{selectedStep && <div className="step-editor"><h3>{selectedStep.name}を編集</h3><label className="field"><span>状態</span><select value={selectedStep.status} onChange={(event) => onUpdate({ status: event.target.value as ProductionStatus })}><option>未着手</option><option>作業中</option><option>確認中</option><option>完了</option></select></label><TextArea label="メモ" value={selectedStep.memo} onChange={(memo) => onUpdate({ memo })} /><TextArea label="関連素材（自由入力）" value={selectedStep.relatedAssets} onChange={(relatedAssets) => onUpdate({ relatedAssets })} /><AssetSelector assets={assets} selectedIds={selectedStep.relatedAssetIds} onChange={(relatedAssetIds) => onUpdate({ relatedAssetIds })} title="関連アセット（ライブラリから選択）" /><TextArea label="関連プロンプト（自由入力）" value={selectedStep.relatedPrompts} onChange={(relatedPrompts) => onUpdate({ relatedPrompts })} /><PromptSelector prompts={prompts} selectedIds={selectedStep.relatedPromptIds} onChange={(relatedPromptIds) => onUpdate({ relatedPromptIds })} title="関連プロンプト（ライブラリから選択）" /><p className="thumbnail-info">工程更新：{formatDate(selectedStep.updatedAt)}</p></div>}</section>;
+function ProductionStepPanel({ assets, prompts, steps, selectedStep, activeSession, onStartSession, onEndSession, onSelect, onUpdate }: { assets: Asset[]; prompts: PromptItem[]; steps: ProductionStep[]; selectedStep?: ProductionStep; activeSession?: WorkSession; onStartSession: (id: ProductionStepId) => void; onEndSession: (memo: string, nextTodo: string) => void; onSelect: (id: ProductionStepId) => void; onUpdate: (patch: Partial<ProductionStep>) => void }) {
+  return <section className="panel step-panel"><div className="section-heading"><div><h2>制作工程管理</h2><p className="muted">8工程の状態から場面の進捗率を自動計算します。</p></div></div><div className="step-grid">{steps.map((step, index) => <button key={step.id} type="button" className={`step-card ${selectedStep?.id === step.id ? 'active' : ''}`} onClick={() => onSelect(step.id)}><span className="step-number">{index + 1}</span><strong>{step.name}</strong><StatusBadge status={step.status} /><small>素材：{step.relatedAssets ? 'あり' : '未設定'} / プロンプト：{step.relatedPrompts ? 'あり' : '未設定'}</small></button>)}</div>{selectedStep && <div className="step-editor"><h3>{selectedStep.name}を編集</h3><WorkSessionBox activeSession={activeSession} selectedStep={selectedStep} onStart={onStartSession} onEnd={onEndSession} /><label className="field"><span>状態</span><select value={selectedStep.status} onChange={(event) => onUpdate({ status: event.target.value as ProductionStatus })}><option>未着手</option><option>作業中</option><option>確認中</option><option>完了</option></select></label><TextArea label="メモ" value={selectedStep.memo} onChange={(memo) => onUpdate({ memo })} /><TextArea label="関連素材（自由入力）" value={selectedStep.relatedAssets} onChange={(relatedAssets) => onUpdate({ relatedAssets })} /><AssetSelector assets={assets} selectedIds={selectedStep.relatedAssetIds} onChange={(relatedAssetIds) => onUpdate({ relatedAssetIds })} title="関連アセット（ライブラリから選択）" /><TextArea label="関連プロンプト（自由入力）" value={selectedStep.relatedPrompts} onChange={(relatedPrompts) => onUpdate({ relatedPrompts })} /><PromptSelector prompts={prompts} selectedIds={selectedStep.relatedPromptIds} onChange={(relatedPromptIds) => onUpdate({ relatedPromptIds })} title="関連プロンプト（ライブラリから選択）" /><p className="thumbnail-info">工程更新：{formatDate(selectedStep.updatedAt)}</p></div>}</section>;
 }
 
 function AssetList({ assets, prompts, onAdd, onUpdate, onDelete }: { assets: Asset[]; prompts?: PromptItem[]; onAdd: () => void; onUpdate: (assetId: string, patch: Partial<Asset>) => void; onDelete: (assetId: string) => void }) {
