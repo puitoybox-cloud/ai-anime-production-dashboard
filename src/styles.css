@@ -1,6 +1,6 @@
 :root {
-  color: #1f2937;
-  background: #f3f4f6;
+  color: #0f172a;
+  background: #f3f7f8;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -20,7 +20,14 @@ select {
 }
 
 button {
+  min-height: 44px;
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .app {
@@ -30,9 +37,10 @@ button {
 }
 
 .panel {
+  overflow-wrap: anywhere;
   background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
   padding: 20px;
 }
@@ -40,62 +48,142 @@ button {
 .home-panel {
   display: flex;
   gap: 16px;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 20px;
+}
+
+.home-fields {
+  flex: 1 1 520px;
 }
 
 .label,
 .field span {
   display: block;
   margin: 0 0 6px;
-  color: #4b5563;
+  color: #164e63;
   font-size: 0.9rem;
   font-weight: 700;
 }
 
+.episode-label {
+  margin-top: 12px;
+}
+
 .title-input {
   min-width: min(70vw, 520px);
-  font-size: 1.25rem;
+  font-size: 1.18rem;
   font-weight: 700;
 }
 
-.actions {
+.actions,
+.reorder-actions,
+.section-heading {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
+.actions {
+  justify-content: flex-end;
+  max-width: 440px;
+}
+
+.section-heading {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.section-heading h2 {
+  margin: 0;
+}
+
 .actions button,
-.scene-card {
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  background: #f9fafb;
-  padding: 10px 12px;
+.section-heading button,
+.reorder-actions button,
+.scene-card-main {
+  border: 1px solid #99f6e4;
+  border-radius: 10px;
+  background: #ecfeff;
+  color: #0f172a;
+  padding: 10px 14px;
+}
+
+.actions button:hover,
+.section-heading button:hover,
+.reorder-actions button:hover,
+.scene-card-main:hover {
+  border-color: #14b8a6;
+  background: #ccfbf1;
+}
+
+button.danger {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #9f1239;
 }
 
 .layout {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 20px;
 }
 
+.import-panel {
+  margin-bottom: 20px;
+}
+
+.import-panel h2,
 .scene-list h2,
 .scene-detail h2 {
-  margin-top: 0;
+  color: #0f172a;
+}
+
+.json-paste {
+  width: 100%;
+  min-height: 220px;
+  margin-bottom: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 12px;
+  resize: vertical;
 }
 
 .scene-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   width: 100%;
-  margin-bottom: 10px;
-  gap: 5px;
-  text-align: left;
+  margin-bottom: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 8px;
+  touch-action: none;
 }
 
 .scene-card.selected {
-  border-color: #2563eb;
-  background: #eff6ff;
+  border-color: #0891b2;
+  background: #ecfeff;
+}
+
+.scene-card-main {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+
+.reorder-actions {
+  align-content: start;
+  justify-content: end;
+}
+
+.reorder-actions button {
+  min-width: 64px;
+  padding: 8px 10px;
 }
 
 .field {
@@ -108,26 +196,92 @@ button {
 .field select,
 .title-input {
   width: 100%;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
+  min-height: 44px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
   padding: 10px 12px;
+  background: #ffffff;
 }
 
 .field textarea {
   resize: vertical;
 }
 
+.average-progress {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+  color: #164e63;
+  font-weight: 700;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #14b8a6, #0891b2);
+}
+
+.progress-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 12px;
+  align-items: center;
+}
+
+.status-message {
+  width: 100%;
+  margin: 6px 0 0;
+  color: #0f766e;
+  font-weight: 700;
+}
+
 @media (max-width: 820px) {
+  .app {
+    padding: 14px;
+  }
+
   .home-panel,
   .layout {
     display: block;
   }
 
-  .scene-list {
+  .scene-list,
+  .import-panel {
     margin-bottom: 20px;
   }
 
   .actions {
+    justify-content: flex-start;
+    max-width: none;
     margin-top: 14px;
+  }
+
+  .title-input {
+    min-width: 0;
+  }
+
+  .scene-card,
+  .progress-editor,
+  .average-progress {
+    grid-template-columns: 1fr;
+  }
+
+  .reorder-actions {
+    justify-content: stretch;
+  }
+
+  .reorder-actions button {
+    flex: 1 1 120px;
   }
 }
