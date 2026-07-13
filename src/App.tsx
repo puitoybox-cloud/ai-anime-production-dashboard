@@ -4,6 +4,7 @@ type ProductionStatus = '未着手' | '作業中' | '確認中' | '完了';
 type ViduDifficulty = '低' | '中' | '高';
 type AssetType = 'image' | 'video' | 'audio' | 'prompt' | 'document' | 'url' | 'other';
 type ViewMode = 'work-list' | 'episode-list' | 'scene-list' | 'scene-edit';
+type ProductionStepId = 'script' | 'storyboard' | 'illustration' | 'ai-generation' | 'clip-studio' | 'final-cut' | 'logic-pro' | 'final-check';
 type ImportMode = 'add-new' | 'update-content' | 'replace-scope';
 type ExportKind = 'full-backup' | 'chatgpt-share';
 type ExportScope = 'all' | 'work' | 'episode' | 'scene';
@@ -12,6 +13,16 @@ type ImageReference = {
   label: string;
   source: string;
   memo: string;
+};
+
+type ProductionStep = {
+  id: ProductionStepId;
+  name: string;
+  status: ProductionStatus;
+  memo: string;
+  relatedAssets: string;
+  relatedPrompts: string;
+  updatedAt: string;
 };
 
 type Asset = {
@@ -45,6 +56,7 @@ type Scene = {
   tags: string[];
   favorite: boolean;
   productionMemo: string;
+  productionSteps: ProductionStep[];
   assets: Asset[];
   createdAt: string;
   updatedAt: string;
@@ -80,7 +92,7 @@ type Work = {
 };
 
 type DashboardData = {
-  schemaVersion: '0.4';
+  schemaVersion: '0.5';
   appName: 'Dream Architect Studio';
   works: Work[];
   createdAt: string;
@@ -107,16 +119,29 @@ type ImportEnvelope = {
 const STORAGE_KEY_V02 = 'ai-anime-production-dashboard:v0.1';
 const STORAGE_KEY_V03 = 'dream-architect-studio:v0.3';
 const STORAGE_KEY_V04 = 'dream-architect-studio:v0.4';
+const STORAGE_KEY_V05 = 'dream-architect-studio:v0.5';
 const MIGRATION_BACKUP_KEY = 'dream-architect-studio:migration-backup:v0.2';
 const PRE_IMPORT_BACKUP_KEY = 'dream-architect-studio:pre-import-backup';
-const SCHEMA_VERSION = '0.4' as const;
+const SCHEMA_VERSION = '0.5' as const;
 
 const emptyImageReference: ImageReference = { label: '', source: '', memo: '' };
 const emptySceneText = { summary: '', tiaLine: '', novaLine: '', decisions: '', openIssues: '', memo: '' };
+const productionStepDefinitions: Array<{ id: ProductionStepId; name: string }> = [
+  { id: 'script', name: '台本' },
+  { id: 'storyboard', name: '絵コンテ' },
+  { id: 'illustration', name: 'イラスト' },
+  { id: 'ai-generation', name: 'AI生成' },
+  { id: 'clip-studio', name: 'Clip Studio修正' },
+  { id: 'final-cut', name: 'Final Cut編集' },
+  { id: 'logic-pro', name: 'Logic Pro' },
+  { id: 'final-check', name: '完成チェック' },
+];
+const statusProgress: Record<ProductionStatus, number> = { '未着手': 0, '作業中': 40, '確認中': 70, '完了': 100 };
+
 const assetTypes: AssetType[] = ['image', 'video', 'audio', 'prompt', 'document', 'url', 'other'];
 const assetTypeLabels: Record<AssetType, string> = { image: '画像', video: '動画', audio: '音声・BGM・SE', prompt: 'AIプロンプト', document: 'PDF・テキスト', url: '外部リンク', other: 'その他' };
 
-const dummyScenes: Array<Omit<Scene, 'thumbnail' | 'tags' | 'favorite' | 'productionMemo' | 'assets' | 'createdAt' | 'updatedAt'>> = [
+const dummyScenes: Array<Omit<Scene, 'thumbnail' | 'tags' | 'favorite' | 'productionMemo' | 'productionSteps' | 'assets' | 'createdAt' | 'updatedAt'>> = [
   { id: '1', title: '第0話-場面1：目覚めるティア', summary: 'ティアが白い実験室のような空間で目を覚まし、自分の記憶が曖昧なことに気づく。', tiaLine: 'ここは……どこ？ 私は、何をしていたの？', novaLine: '落ち着いて。君の状態は安定している。まずは呼吸を整えよう。', decisions: '冒頭は静かな雰囲気で開始。ティアの不安を中心に見せる。', openIssues: '実験室の具体的な美術設定を決める。', memo: '光は柔らかく、少し神秘的にする。', productionStatus: '作業中', progressPercent: 50, viduDifficulty: '中' },
   { id: '2', title: '第0話-場面2：ノヴァとの出会い', summary: 'ティアの前に案内役のノヴァが現れ、状況を説明しようとする。', tiaLine: 'あなたは誰？ 私を知っているの？', novaLine: '僕はノヴァ。君をここから導くために作られたサポートAIだ。', decisions: 'ノヴァは落ち着いた声で、敵ではない印象を出す。', openIssues: 'ノヴァのビジュアル表現を人型にするかホログラムにするか。', memo: '会話テンポはゆっくり。', productionStatus: '未着手', progressPercent: 0, viduDifficulty: '低' },
   { id: '3', title: '第0話-場面3：外の世界', summary: '壁面スクリーンに、崩壊した都市と美しい空が映し出される。', tiaLine: 'これが……外の世界？', novaLine: '正確には、君がこれから向き合う世界の記録だ。', decisions: '世界観提示のため、印象的なワイドショットを入れる。', openIssues: '都市崩壊の程度と時代感を調整する。', memo: 'Vidu生成では背景変化が多いため難易度高め。', productionStatus: '確認中', progressPercent: 50, viduDifficulty: '高' },
@@ -129,7 +154,24 @@ function createId(prefix: string) { return `${prefix}-${crypto.randomUUID?.() ??
 function isProductionStatus(value: unknown): value is ProductionStatus { return value === '未着手' || value === '作業中' || value === '確認中' || value === '完了'; }
 function isViduDifficulty(value: unknown): value is ViduDifficulty { return value === '低' || value === '中' || value === '高'; }
 function isAssetType(value: unknown): value is AssetType { return typeof value === 'string' && assetTypes.includes(value as AssetType); }
-function inferProgress(status: ProductionStatus) { if (status === '完了') return 100; if (status === '作業中' || status === '確認中') return 50; return 0; }
+function inferProgress(status: ProductionStatus) { return statusProgress[status]; }
+function createProductionSteps(status: ProductionStatus = '未着手'): ProductionStep[] { const timestamp = nowIso(); return productionStepDefinitions.map((step) => ({ ...step, status, memo: '', relatedAssets: '', relatedPrompts: '', updatedAt: timestamp })); }
+function migrateProductionSteps(value: unknown, fallbackStatus: ProductionStatus): ProductionStep[] {
+  const source = Array.isArray(value) ? value : [];
+  return productionStepDefinitions.map((definition) => {
+    const raw = source.find((item) => item && typeof item === 'object' && (item as Partial<ProductionStep>).id === definition.id) as Partial<ProductionStep> | undefined;
+    return {
+      ...definition,
+      status: isProductionStatus(raw?.status) ? raw.status : fallbackStatus,
+      memo: typeof raw?.memo === 'string' ? raw.memo : '',
+      relatedAssets: typeof raw?.relatedAssets === 'string' ? raw.relatedAssets : '',
+      relatedPrompts: typeof raw?.relatedPrompts === 'string' ? raw.relatedPrompts : '',
+      updatedAt: typeof raw?.updatedAt === 'string' ? raw.updatedAt : nowIso(),
+    };
+  });
+}
+function calculateSceneProgress(steps: ProductionStep[]) { return steps.length ? Math.round(steps.reduce((sum, step) => sum + statusProgress[step.status], 0) / steps.length) : 0; }
+function inferSceneStatusFromSteps(steps: ProductionStep[]): ProductionStatus { if (steps.every((step) => step.status === '完了')) return '完了'; if (steps.some((step) => step.status === '確認中')) return '確認中'; if (steps.some((step) => step.status === '作業中')) return '作業中'; return '未着手'; }
 function clampProgress(value: unknown, fallback: number) { const numberValue = typeof value === 'number' ? value : Number(value); if (!Number.isFinite(numberValue)) return fallback; return Math.min(100, Math.max(0, Math.round(numberValue))); }
 function cloneImage(value?: Partial<ImageReference>): ImageReference { return { label: typeof value?.label === 'string' ? value.label : '', source: typeof value?.source === 'string' ? value.source : '', memo: typeof value?.memo === 'string' ? value.memo : '' }; }
 function readTags(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
@@ -165,6 +207,8 @@ function inferStatus(scenes: Scene[]): ProductionStatus { if (scenes.length && s
 function migrateScene(raw: Partial<Scene> & { id?: string | number }, index: number): Scene {
   const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : nowIso();
   const productionStatus = isProductionStatus(raw.productionStatus) ? raw.productionStatus : '未着手';
+  const productionSteps = migrateProductionSteps((raw as Partial<Scene>).productionSteps, productionStatus);
+  const calculatedProgress = calculateSceneProgress(productionSteps);
   return {
     id: String(raw.id ?? `scene-${index + 1}`),
     title: typeof raw.title === 'string' ? raw.title : '新しい場面',
@@ -174,13 +218,14 @@ function migrateScene(raw: Partial<Scene> & { id?: string | number }, index: num
     decisions: typeof raw.decisions === 'string' ? raw.decisions : '',
     openIssues: typeof raw.openIssues === 'string' ? raw.openIssues : '',
     memo: typeof raw.memo === 'string' ? raw.memo : '',
-    productionStatus,
-    progressPercent: clampProgress(raw.progressPercent, inferProgress(productionStatus)),
+    productionStatus: inferSceneStatusFromSteps(productionSteps),
+    progressPercent: calculatedProgress,
     viduDifficulty: isViduDifficulty(raw.viduDifficulty) ? raw.viduDifficulty : '低',
     thumbnail: cloneImage(raw.thumbnail),
     tags: readTags(raw.tags),
     favorite: Boolean(raw.favorite),
     productionMemo: typeof raw.productionMemo === 'string' ? raw.productionMemo : '',
+    productionSteps,
     assets: Array.isArray((raw as Partial<Scene>).assets) ? ((raw as Partial<Scene>).assets ?? []).map((asset, assetIndex) => migrateAsset(asset, assetIndex)) : [],
     createdAt,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : createdAt,
@@ -210,22 +255,24 @@ function migrateV02Project(raw: unknown): DashboardData | null {
 function normalizeDashboard(raw: unknown): DashboardData | null {
   if (!raw || typeof raw !== 'object') return null;
   const source = raw as Partial<DashboardData>;
-  if ((source.schemaVersion !== SCHEMA_VERSION && source.schemaVersion !== '0.3') || !Array.isArray(source.works)) return null;
+  if ((source.schemaVersion !== SCHEMA_VERSION && source.schemaVersion !== '0.4' && source.schemaVersion !== '0.3') || !Array.isArray(source.works)) return null;
   const timestamp = typeof source.updatedAt === 'string' ? source.updatedAt : nowIso();
   return { schemaVersion: SCHEMA_VERSION, appName: 'Dream Architect Studio', createdAt: typeof source.createdAt === 'string' ? source.createdAt : timestamp, updatedAt: timestamp, works: source.works.map((work, workIndex) => ({ id: typeof work.id === 'string' ? work.id : `work-${workIndex + 1}`, title: typeof work.title === 'string' ? work.title : '新しい作品', description: typeof work.description === 'string' ? work.description : '', productionStatus: isProductionStatus(work.productionStatus) ? work.productionStatus : '未着手', thumbnail: cloneImage(work.thumbnail), tags: readTags(work.tags), favorite: Boolean(work.favorite), productionMemo: typeof work.productionMemo === 'string' ? work.productionMemo : '', createdAt: typeof work.createdAt === 'string' ? work.createdAt : timestamp, updatedAt: typeof work.updatedAt === 'string' ? work.updatedAt : timestamp, episodes: Array.isArray(work.episodes) && work.episodes.length ? work.episodes.map((episode, episodeIndex) => ({ id: typeof episode.id === 'string' ? episode.id : `episode-${episodeIndex}`, episodeNumber: typeof episode.episodeNumber === 'number' ? episode.episodeNumber : episodeIndex, title: typeof episode.title === 'string' ? episode.title : `第${episodeIndex}話`, summary: typeof episode.summary === 'string' ? episode.summary : '', productionStatus: isProductionStatus(episode.productionStatus) ? episode.productionStatus : '未着手', thumbnail: cloneImage(episode.thumbnail), tags: readTags(episode.tags), favorite: Boolean(episode.favorite), productionMemo: typeof episode.productionMemo === 'string' ? episode.productionMemo : '', scenes: Array.isArray(episode.scenes) && episode.scenes.length ? episode.scenes.map((scene, sceneIndex) => migrateScene(scene, sceneIndex)) : [createScene()], createdAt: typeof episode.createdAt === 'string' ? episode.createdAt : timestamp, updatedAt: typeof episode.updatedAt === 'string' ? episode.updatedAt : timestamp })) : [createEpisode(0)] })) };
 }
 
 function loadInitialData(): DashboardData {
+  const savedV05 = localStorage.getItem(STORAGE_KEY_V05);
+  if (savedV05) { try { return normalizeDashboard(JSON.parse(savedV05)) ?? createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV04 = localStorage.getItem(STORAGE_KEY_V04);
   if (savedV04) { try { return normalizeDashboard(JSON.parse(savedV04)) ?? createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV03 = localStorage.getItem(STORAGE_KEY_V03);
-  if (savedV03) { try { const migrated = normalizeDashboard(JSON.parse(savedV03)); if (migrated) { localStorage.setItem(STORAGE_KEY_V04, JSON.stringify(migrated)); return migrated; } return createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
+  if (savedV03) { try { const migrated = normalizeDashboard(JSON.parse(savedV03)); if (migrated) { localStorage.setItem(STORAGE_KEY_V05, JSON.stringify(migrated)); return migrated; } return createDefaultDashboardData(); } catch { return createDefaultDashboardData(); } }
   const savedV02 = localStorage.getItem(STORAGE_KEY_V02);
   if (savedV02) {
     try {
       localStorage.setItem(MIGRATION_BACKUP_KEY, JSON.stringify({ backedUpAt: nowIso(), storageKey: STORAGE_KEY_V02, raw: savedV02 }));
       const migrated = migrateV02Project(JSON.parse(savedV02));
-      if (migrated) { localStorage.setItem(STORAGE_KEY_V04, JSON.stringify(migrated)); return migrated; }
+      if (migrated) { localStorage.setItem(STORAGE_KEY_V05, JSON.stringify(migrated)); return migrated; }
     } catch { /* Keep the old key untouched and fall back to default v0.3 data. */ }
   }
   return createDefaultDashboardData();
@@ -248,7 +295,7 @@ export function App() {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { localStorage.setItem(STORAGE_KEY_V04, JSON.stringify(dashboard)); }, [dashboard]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEY_V05, JSON.stringify(dashboard)); }, [dashboard]);
 
   const selectedWork = dashboard.works.find((work) => work.id === selectedWorkId) ?? dashboard.works[0];
   const selectedEpisode = selectedWork?.episodes.find((episode) => episode.id === selectedEpisodeId) ?? selectedWork?.episodes[0];
@@ -257,7 +304,7 @@ export function App() {
   const mutateDashboard = (updater: (current: DashboardData) => DashboardData) => setDashboard((current) => ({ ...updater(current), updatedAt: nowIso() }));
   const updateSelectedWork = (patch: Partial<Work>) => { if (!selectedWork) return; mutateDashboard((current) => ({ ...current, works: current.works.map((work) => work.id === selectedWork.id ? { ...work, ...patch, updatedAt: nowIso() } : work) })); };
   const updateSelectedEpisode = (patch: Partial<Episode>) => { if (!selectedWork || !selectedEpisode) return; mutateDashboard((current) => ({ ...current, works: current.works.map((work) => work.id !== selectedWork.id ? work : { ...work, updatedAt: nowIso(), episodes: work.episodes.map((episode) => episode.id === selectedEpisode.id ? { ...episode, ...patch, updatedAt: nowIso() } : episode) }) })); };
-  const updateSelectedScene = <K extends keyof Scene>(key: K, value: Scene[K]) => { if (!selectedWork || !selectedEpisode || !selectedScene) return; mutateDashboard((current) => ({ ...current, works: current.works.map((work) => work.id !== selectedWork.id ? work : { ...work, updatedAt: nowIso(), episodes: work.episodes.map((episode) => episode.id !== selectedEpisode.id ? episode : { ...episode, updatedAt: nowIso(), scenes: episode.scenes.map((scene) => scene.id !== selectedScene.id ? scene : { ...scene, [key]: value, ...(key === 'productionStatus' && value === '完了' ? { progressPercent: 100 } : {}), updatedAt: nowIso() }) }) }) })); };
+  const updateSelectedScene = <K extends keyof Scene>(key: K, value: Scene[K]) => { if (!selectedWork || !selectedEpisode || !selectedScene) return; mutateDashboard((current) => ({ ...current, works: current.works.map((work) => work.id !== selectedWork.id ? work : { ...work, updatedAt: nowIso(), episodes: work.episodes.map((episode) => episode.id !== selectedEpisode.id ? episode : { ...episode, updatedAt: nowIso(), scenes: episode.scenes.map((scene) => { if (scene.id !== selectedScene.id) return scene; const next = { ...scene, [key]: value, updatedAt: nowIso() } as Scene; if (key === 'productionSteps') { next.progressPercent = calculateSceneProgress(next.productionSteps); next.productionStatus = inferSceneStatusFromSteps(next.productionSteps); } return next; }) }) }) })); };
 
   const openWork = (work: Work) => { setSelectedWorkId(work.id); setSelectedEpisodeId(work.episodes[0]?.id ?? null); setSelectedSceneId(work.episodes[0]?.scenes[0]?.id ?? null); setViewMode('episode-list'); };
   const openEpisode = (episode: Episode) => { setSelectedEpisodeId(episode.id); setSelectedSceneId(episode.scenes[0]?.id ?? null); setViewMode('scene-list'); };
@@ -285,7 +332,7 @@ export function App() {
     const data = kind === 'chatgpt-share' ? stripForChatGpt(rawData) : rawData;
     return { schemaVersion: SCHEMA_VERSION, exportType: kind, scope, exportedAt: nowIso(), ...context, data };
   };
-  const exportJson = () => { const data = buildExportData(exportKind, exportScope); downloadJson(data, `dream-architect-studio-${exportKind}-${exportScope}-v0.4.json`); };
+  const exportJson = () => { const data = buildExportData(exportKind, exportScope); downloadJson(data, `dream-architect-studio-${exportKind}-${exportScope}-v0.5.json`); };
   const copyJson = async () => { try { await navigator.clipboard.writeText(JSON.stringify(buildExportData(exportKind, exportScope), null, 2)); setMessage('JSONをクリップボードへコピーしました。'); } catch { setMessage('クリップボードへコピーできませんでした。書き出しボタンを使用してください。'); } };
 
   const applyImport = (text: string) => {
@@ -309,7 +356,7 @@ export function App() {
   const importFile = async (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; const text = await file.text(); setPastedJson(text); applyImport(text); event.target.value = ''; };
 
   return <main className="app">
-    <header className="app-header"><div><p className="eyebrow">Dream Architect Studio</p><h1>AIアニメ制作ダッシュボード v0.4</h1></div><button onClick={() => setJsonPanelOpen((open) => !open)}>JSON連携</button></header>
+    <header className="app-header"><div><p className="eyebrow">Dream Architect Studio</p><h1>AIアニメ制作ダッシュボード v0.5</h1></div><button onClick={() => setJsonPanelOpen((open) => !open)}>JSON連携</button></header>
     <Breadcrumbs viewMode={viewMode} work={selectedWork} episode={selectedEpisode} scene={selectedScene} onWorks={() => setViewMode('work-list')} onEpisodes={() => setViewMode('episode-list')} onScenes={() => setViewMode('scene-list')} />
     {jsonPanelOpen && <section className="panel import-panel"><h2>JSON連携</h2><div className="form-grid"><label className="field"><span>種類</span><select value={exportKind} onChange={(event) => setExportKind(event.target.value as ExportKind)}><option value="full-backup">完全バックアップJSON</option><option value="chatgpt-share">ChatGPT共有JSON</option></select></label><label className="field"><span>範囲</span><select value={exportScope} onChange={(event) => setExportScope(event.target.value as ExportScope)}><option value="all">全体</option><option value="work">選択中の作品</option><option value="episode">選択中の話数</option><option value="scene">選択中の場面</option></select></label><label className="field"><span>読み込み方式</span><select value={importMode} onChange={(event) => setImportMode(event.target.value as ImportMode)}><option value="add-new">新規だけ追加</option><option value="update-content">一致IDを更新</option><option value="replace-scope">選択範囲を置き換え</option></select></label></div><div className="actions"><button onClick={exportJson}>JSON書き出し</button><button onClick={copyJson}>JSONをコピー</button><button onClick={() => fileInputRef.current?.click()}>JSONファイル読み込み</button><input ref={fileInputRef} type="file" accept="application/json" hidden onChange={importFile} /></div><textarea className="json-paste" value={pastedJson} onChange={(event) => setPastedJson(event.target.value)} placeholder="ここにChatGPT共有JSONまたはバックアップJSONを貼り付け" /><div className="actions"><button onClick={() => applyImport(pastedJson)}>貼り付けたJSONを読み込む</button></div>{message && <p className="status-message">{message}</p>}</section>}
     {viewMode === 'work-list' && <WorkList works={dashboard.works} onAdd={addWork} onOpen={openWork} onDelete={deleteWork} onSelect={(work) => { setSelectedWorkId(work.id); setSelectedEpisodeId(work.episodes[0]?.id ?? null); setSelectedSceneId(work.episodes[0]?.scenes[0]?.id ?? null); }} />}
@@ -364,15 +411,26 @@ function EpisodeList({ work, onAdd, onOpen, onDelete, onMove, onUpdate }: { work
 }
 
 function SceneList({ episode, onAdd, onOpen, onDelete, onMove, draggedId, setDraggedId, handleTouchReorder, onUpdate }: { episode: Episode; onAdd: () => void; onOpen: (scene: Scene) => void; onDelete: (id: string) => void; onMove: (id: string, direction: -1 | 1) => void; draggedId: string | null; setDraggedId: (id: string | null) => void; handleTouchReorder: (event: PointerEvent<HTMLElement>) => void; onUpdate: (patch: Partial<Episode>) => void }) {
-  return <><section className="panel detail-panel"><h2>話数情報</h2><EditableCommon entity={episode} onChange={onUpdate} titleLabel="話数タイトル" descriptionLabel="話数概要" /></section><section className="panel scene-list"><div className="section-heading"><h2>場面一覧</h2><button onClick={onAdd}>＋ 場面追加</button></div>{episode.scenes.map((scene, index) => <article key={scene.id} data-scene-id={scene.id} className="scene-card" draggable onDragStart={() => setDraggedId(scene.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedId) moveByDrop(draggedId, scene.id); setDraggedId(null); }} onPointerDown={(event: PointerEvent<HTMLElement>) => { if (event.pointerType === 'touch') { setDraggedId(scene.id); event.currentTarget.setPointerCapture(event.pointerId); } }} onPointerMove={handleTouchReorder} onPointerUp={() => setDraggedId(null)} onPointerCancel={() => setDraggedId(null)}><button className="scene-card-main" onClick={() => onOpen(scene)}><strong>{index + 1}. {scene.favorite ? '★ ' : ''}{scene.title}</strong><span>制作状態：{scene.productionStatus}</span><span>Vidu難易度：{scene.viduDifficulty}</span><ProgressBar value={scene.progressPercent} /><span>進捗率：{scene.progressPercent}% / 更新：{formatDate(scene.updatedAt)}</span></button><div className="reorder-actions"><button onClick={() => onMove(scene.id, -1)} disabled={index === 0}>上へ</button><button onClick={() => onMove(scene.id, 1)} disabled={index === episode.scenes.length - 1}>下へ</button><button className="danger" onClick={() => onDelete(scene.id)}>削除</button></div></article>)} </section></>;
+  return <><section className="panel detail-panel"><h2>話数情報</h2><EditableCommon entity={episode} onChange={onUpdate} titleLabel="話数タイトル" descriptionLabel="話数概要" /></section><section className="panel scene-list"><div className="section-heading"><h2>場面一覧</h2><button onClick={onAdd}>＋ 場面追加</button></div>{episode.scenes.map((scene, index) => <article key={scene.id} data-scene-id={scene.id} className="scene-card" draggable onDragStart={() => setDraggedId(scene.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedId) moveByDrop(draggedId, scene.id); setDraggedId(null); }} onPointerDown={(event: PointerEvent<HTMLElement>) => { if (event.pointerType === 'touch') { setDraggedId(scene.id); event.currentTarget.setPointerCapture(event.pointerId); } }} onPointerMove={handleTouchReorder} onPointerUp={() => setDraggedId(null)} onPointerCancel={() => setDraggedId(null)}><button className="scene-card-main" onClick={() => onOpen(scene)}><strong>{index + 1}. {scene.favorite ? '★ ' : ''}{scene.title}</strong><span>制作状態：{scene.productionStatus} / 工程：{scene.productionSteps.filter((step) => step.status === '完了').length}/{scene.productionSteps.length}完了</span><span>Vidu難易度：{scene.viduDifficulty}</span><ProgressBar value={scene.progressPercent} /><span>進捗率：{scene.progressPercent}% / 更新：{formatDate(scene.updatedAt)}</span></button><div className="reorder-actions"><button onClick={() => onMove(scene.id, -1)} disabled={index === 0}>上へ</button><button onClick={() => onMove(scene.id, 1)} disabled={index === episode.scenes.length - 1}>下へ</button><button className="danger" onClick={() => onDelete(scene.id)}>削除</button></div></article>)} </section></>;
   function moveByDrop(fromId: string, targetId: string) { const from = episode.scenes.findIndex((scene) => scene.id === fromId); const to = episode.scenes.findIndex((scene) => scene.id === targetId); if (from < to) { for (let i = from; i < to; i += 1) onMove(fromId, 1); } else { for (let i = from; i > to; i -= 1) onMove(fromId, -1); } }
 }
 
 function SceneEditor({ scene, onUpdate, onDelete, onAddAsset, onUpdateAsset, onDeleteAsset }: { scene: Scene; onUpdate: <K extends keyof Scene>(key: K, value: Scene[K]) => void; onDelete: () => void; onAddAsset: () => void; onUpdateAsset: (assetId: string, patch: Partial<Asset>) => void; onDeleteAsset: (assetId: string) => void }) {
+  const [selectedStepId, setSelectedStepId] = useState<ProductionStepId>(scene.productionSteps[0]?.id ?? 'script');
+  const selectedStep = scene.productionSteps.find((step) => step.id === selectedStepId) ?? scene.productionSteps[0];
+  const updateStep = (patch: Partial<ProductionStep>) => {
+    if (!selectedStep) return;
+    onUpdate('productionSteps', scene.productionSteps.map((step) => step.id === selectedStep.id ? { ...step, ...patch, updatedAt: nowIso() } : step));
+  };
   return <>
-    <section className="panel scene-detail"><div className="section-heading"><h2>場面編集</h2><button className="danger" onClick={onDelete}>この場面を削除</button></div><Field label="場面タイトル" value={scene.title} onChange={(value) => onUpdate('title', value)} /><TextArea label="概要" value={scene.summary} onChange={(value) => onUpdate('summary', value)} /><TextArea label="ティアのセリフ" value={scene.tiaLine} onChange={(value) => onUpdate('tiaLine', value)} /><TextArea label="ノヴァのセリフ" value={scene.novaLine} onChange={(value) => onUpdate('novaLine', value)} /><TextArea label="決定事項" value={scene.decisions} onChange={(value) => onUpdate('decisions', value)} /><TextArea label="未決定事項" value={scene.openIssues} onChange={(value) => onUpdate('openIssues', value)} /><TextArea label="メモ" value={scene.memo} onChange={(value) => onUpdate('memo', value)} /><CommonFields entity={scene} onChange={(patch) => { if (patch.thumbnail) onUpdate('thumbnail', patch.thumbnail as ImageReference); if (patch.tags) onUpdate('tags', patch.tags as string[]); if (typeof patch.favorite === 'boolean') onUpdate('favorite', patch.favorite); if (typeof patch.productionMemo === 'string') onUpdate('productionMemo', patch.productionMemo); }} /><label className="field"><span>制作状態</span><select value={scene.productionStatus} onChange={(event) => onUpdate('productionStatus', event.target.value as ProductionStatus)}><option>未着手</option><option>作業中</option><option>確認中</option><option>完了</option></select></label><label className="field"><span>進捗率（0〜100%）</span><div className="progress-editor"><input type="range" min="0" max="100" value={scene.progressPercent} onChange={(event) => onUpdate('progressPercent', clampProgress(event.target.value, scene.progressPercent))} /><input type="number" min="0" max="100" value={scene.progressPercent} onChange={(event) => onUpdate('progressPercent', clampProgress(event.target.value, scene.progressPercent))} /></div></label><label className="field"><span>Vidu難易度</span><select value={scene.viduDifficulty} onChange={(event) => onUpdate('viduDifficulty', event.target.value as ViduDifficulty)}><option>低</option><option>中</option><option>高</option></select></label></section>
+    <section className="panel scene-detail"><div className="section-heading"><h2>場面編集</h2><button className="danger" onClick={onDelete}>この場面を削除</button></div><Field label="場面タイトル" value={scene.title} onChange={(value) => onUpdate('title', value)} /><TextArea label="概要" value={scene.summary} onChange={(value) => onUpdate('summary', value)} /><TextArea label="ティアのセリフ" value={scene.tiaLine} onChange={(value) => onUpdate('tiaLine', value)} /><TextArea label="ノヴァのセリフ" value={scene.novaLine} onChange={(value) => onUpdate('novaLine', value)} /><TextArea label="決定事項" value={scene.decisions} onChange={(value) => onUpdate('decisions', value)} /><TextArea label="未決定事項" value={scene.openIssues} onChange={(value) => onUpdate('openIssues', value)} /><TextArea label="メモ" value={scene.memo} onChange={(value) => onUpdate('memo', value)} /><CommonFields entity={scene} onChange={(patch) => { if (patch.thumbnail) onUpdate('thumbnail', patch.thumbnail as ImageReference); if (patch.tags) onUpdate('tags', patch.tags as string[]); if (typeof patch.favorite === 'boolean') onUpdate('favorite', patch.favorite); if (typeof patch.productionMemo === 'string') onUpdate('productionMemo', patch.productionMemo); }} /><div className="readonly-progress"><span>制作状態：{scene.productionStatus}</span><span>工程から自動計算：{scene.progressPercent}%</span><ProgressBar value={scene.progressPercent} /></div><label className="field"><span>Vidu難易度</span><select value={scene.viduDifficulty} onChange={(event) => onUpdate('viduDifficulty', event.target.value as ViduDifficulty)}><option>低</option><option>中</option><option>高</option></select></label></section>
+    <ProductionStepPanel steps={scene.productionSteps} selectedStep={selectedStep} onSelect={setSelectedStepId} onUpdate={updateStep} />
     <AssetList assets={scene.assets} onAdd={onAddAsset} onUpdate={onUpdateAsset} onDelete={onDeleteAsset} />
   </>;
+}
+
+function ProductionStepPanel({ steps, selectedStep, onSelect, onUpdate }: { steps: ProductionStep[]; selectedStep?: ProductionStep; onSelect: (id: ProductionStepId) => void; onUpdate: (patch: Partial<ProductionStep>) => void }) {
+  return <section className="panel step-panel"><div className="section-heading"><div><h2>制作工程管理</h2><p className="muted">8工程の状態から場面の進捗率を自動計算します。</p></div></div><div className="step-grid">{steps.map((step, index) => <button key={step.id} type="button" className={`step-card ${selectedStep?.id === step.id ? 'active' : ''}`} onClick={() => onSelect(step.id)}><span className="step-number">{index + 1}</span><strong>{step.name}</strong><StatusBadge status={step.status} /><small>素材：{step.relatedAssets ? 'あり' : '未設定'} / プロンプト：{step.relatedPrompts ? 'あり' : '未設定'}</small></button>)}</div>{selectedStep && <div className="step-editor"><h3>{selectedStep.name}を編集</h3><label className="field"><span>状態</span><select value={selectedStep.status} onChange={(event) => onUpdate({ status: event.target.value as ProductionStatus })}><option>未着手</option><option>作業中</option><option>確認中</option><option>完了</option></select></label><TextArea label="メモ" value={selectedStep.memo} onChange={(memo) => onUpdate({ memo })} /><TextArea label="関連素材" value={selectedStep.relatedAssets} onChange={(relatedAssets) => onUpdate({ relatedAssets })} /><TextArea label="関連プロンプト" value={selectedStep.relatedPrompts} onChange={(relatedPrompts) => onUpdate({ relatedPrompts })} /><p className="thumbnail-info">工程更新：{formatDate(selectedStep.updatedAt)}</p></div>}</section>;
 }
 
 function AssetList({ assets, onAdd, onUpdate, onDelete }: { assets: Asset[]; onAdd: () => void; onUpdate: (assetId: string, patch: Partial<Asset>) => void; onDelete: (assetId: string) => void }) {
